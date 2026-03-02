@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*.*.*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - run: bun test
+
+  build:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            out: bemind-search-mcp-linux-x64
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            out: bemind-search-mcp-linux-arm64
+          - os: ubuntu-latest
+            target: bun-linux-x64-musl
+            out: bemind-search-mcp-linux-x64-musl
+          - os: windows-latest
+            target: bun-windows-x64
+            out: bemind-search-mcp-windows-x64.exe
+          - os: macos-latest
+            target: bun-darwin-arm64
+            out: bemind-search-mcp-darwin-arm64
+          - os: macos-13
+            target: bun-darwin-x64
+            out: bemind-search-mcp-darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install --frozen-lockfile
+      - name: Compile single-file executable
+        run: bun build --compile --target=${{ matrix.target }} src/server.ts --outfile dist/${{ matrix.out }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
