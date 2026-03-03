@@ -21,6 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Ensure RELEASE_PAT is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
+          echo "Missing required secret: RELEASE_PAT"
+          echo "Create a PAT with repository contents write permission and store it as RELEASE_PAT."
+          exit 1
+          fi
 
       - name: Resolve and validate version
         id: v
