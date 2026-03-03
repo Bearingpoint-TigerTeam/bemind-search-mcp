@@ -105,3 +105,50 @@ Cross-compile targets: Linux x64/arm64/musl, Windows x64, macOS arm64/x64.
 ## Transport
 
 - **stdio** (default): JSON-RPC 2.0 over stdin/stdout. Logs to stderr only.
+
+## Releasing
+
+This project uses a **tag-driven release flow** with GitHub Actions.
+
+### Versioning policy
+
+- Source of truth: `package.json` `version`
+- Release tag format:
+  - Stable: `vMAJOR.MINOR.PATCH` (example: `v2.1.0`)
+  - Prerelease: `vMAJOR.MINOR.PATCH-rc.N` / `-beta.N` (example: `v2.2.0-rc.1`)
+- Release artifacts are cross-compiled and uploaded to GitHub **Releases**.
+
+### Release workflows
+
+- `release-manual` (manual trigger): validates version and creates/pushes release tag.
+- `release-on-tag` (automatic): runs on tag push, builds all targets, uploads binaries to the matching GitHub Release.
+
+### Stable release runbook
+
+1. Update `package.json` version to the next stable version.
+2. Merge to `main`.
+3. Trigger **Actions → release-manual**:
+   - Leave `version` empty (recommended), or provide the exact same version as `package.json`.
+   - Set `prerelease=false`.
+4. Wait for tag creation (`vX.Y.Z`).
+5. Confirm `release-on-tag` completes and assets appear under **Releases**.
+
+### Prerelease runbook (RC/Beta)
+
+1. Set `package.json` version to prerelease (example: `2.2.0-rc.1`).
+2. Merge to `main`.
+3. Trigger **Actions → release-manual** with:
+   - `version` empty (recommended)
+   - `prerelease=true`
+4. Verify release appears as prerelease with expected assets.
+
+### Expected safeguards
+
+The workflow fails fast if:
+
+- `version` is not valid semver.
+- `version` and `package.json` differ.
+- prerelease flag and version suffix are inconsistent.
+- target tag already exists (prevents accidental overwrite/reuse).
+
+If you see a tag-exists failure when using empty input, bump `package.json` version and rerun.

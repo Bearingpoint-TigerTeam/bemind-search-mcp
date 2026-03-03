@@ -1,0 +1,124 @@
+name: release-on-tag
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"         # e.g. v2.1.0 or v2.1.0-rc.1
+          VERSION="${TAG#v}"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag is not valid semver: $TAG"
+            exit 1
+          fi
+
+          if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PACKAGE_VERSION" != "$VERSION" ]; then
+            echo "package.json version ($PACKAGE_VERSION) must match tag version ($VERSION)"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "release_name=BeMind Search MCP $TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            out: bemind-search-mcp-linux-x64
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            out: bemind-search-mcp-linux-arm64
+          - os: ubuntu-latest
+            target: bun-linux-x64-musl
+            out: bemind-search-mcp-linux-x64-musl
+          - os: windows-latest
+            target: bun-windows-x64
+            out: bemind-search-mcp-windows-x64.exe
+          - os: macos-latest
+            target: bun-darwin-arm64
+            out: bemind-search-mcp-darwin-arm64
+          - os: macos-13
+            target: bun-darwin-x64
+            out: bemind-search-mcp-darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install --frozen-lockfile
+
+      - name: Compile single-file executable
+        run: |
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            src/server.ts \
+            --outfile dist/${{ matrix.out }}
+
+      - name: Stage versioned artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.version }}"
+          mkdir -p release
+          cp "dist/${{ matrix.out }}" "release/${{ matrix.out }}-${VERSION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}-${{ needs.prepare.outputs.version }}
+          path: release/${{ matrix.out }}-${{ needs.prepare.outputs.version }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*

@@ -1,0 +1,90 @@
+name: release-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (semver without leading v, e.g. 2.1.0 or 2.1.0-rc.1). Leave empty to use package.json version."
+        required: false
+        type: string
+      prerelease:
+        description: "If true, version must include prerelease suffix like -rc.1 or -beta.1"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate version
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          PRERELEASE_INPUT="${{ github.event.inputs.prerelease }}"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$PACKAGE_VERSION"
+          fi
+
+          # semver basic
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          # enforce package.json consistency for stable flow
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Version mismatch. Input/version='$VERSION' package.json='$PACKAGE_VERSION'"
+            echo "Please bump package.json first to keep source-of-truth consistent."
+            exit 1
+          fi
+
+          # prerelease policy checks
+          if [ "$PRERELEASE_INPUT" = "true" ]; then
+            if ! [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
+              echo "prerelease=true but version has no prerelease suffix (e.g. -rc.1)"
+              exit 1
+            fi
+          else
+            if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
+              echo "prerelease=false but version is prerelease: $VERSION"
+              exit 1
+            fi
+          fi
+
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag does not already exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.v.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "Tag already exists: $TAG"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.v.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Created tag $TAG"
