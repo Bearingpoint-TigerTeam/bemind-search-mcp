@@ -152,3 +152,17 @@ The workflow fails fast if:
 - target tag already exists (prevents accidental overwrite/reuse).
 
 If you see a tag-exists failure when using empty input, bump `package.json` version and rerun.
+
+### Token rotation checklist (`RELEASE_PAT`)
+
+- [ ] Create a new fine-grained PAT (scope: this repo only, **Contents: Read and write**).
+- [ ] Set an expiration date (recommended: 30–90 days).
+- [ ] Update repo secret: **Settings → Secrets and variables → Actions → `RELEASE_PAT`**.
+- [ ] Run a dry release test (or workflow validation) to confirm tag push still works.
+- [ ] Revoke the old PAT after successful validation.
+- [ ] Record rotation date/owner in team notes.
+
+**If release-on-tag does not trigger after rotation:**
+- Verify secret name is exactly `RELEASE_PAT`.
+- Verify token owner has access to `bemind-search-mcp`.
+- Verify token repository permissions include **Contents: Read and write**.

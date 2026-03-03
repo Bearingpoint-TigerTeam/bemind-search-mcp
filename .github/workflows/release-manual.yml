@@ -85,16 +85,34 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.v.outputs.tag }}"
+
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
-            echo "Tag already exists: $TAG"
-            exit 1
+          echo "Tag already exists: $TAG"
+
+          REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          if [ "$REMOTE_SHA" != "$HEAD_SHA" ]; then
+              echo "Existing tag $TAG points to $REMOTE_SHA, but current commit is $HEAD_SHA."
+              echo "Refusing to continue. Bump version or use the tagged commit."
+              exit 1
           fi
+
+          echo "Tag $TAG already points to current commit. Continuing for safe re-run."
+          exit 0
+          fi
+
+          echo "Tag does not exist yet. Proceeding to create."
 
       - name: Create and push tag
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.v.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "Tag already exists, skipping creation."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "$TAG"
