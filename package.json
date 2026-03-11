@@ -1,6 +1,6 @@
 {
   "name": "bemind-search-mcp",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "BeMind Search MCP Server — Azure AI Search, SAP, Microsoft Graph, Office document tools",
   "module": "src/server.ts",
   "type": "module",
