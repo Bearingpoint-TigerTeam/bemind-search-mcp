@@ -96,22 +96,24 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          BASENAME="${{ matrix.out }}-${VERSION}"
-          mkdir -p release
+          BINARY="${{ matrix.out }}"
+          BASENAME="${BINARY}-${VERSION}"
+          mkdir -p release staging
 
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            # keep .exe and zip for clean download type
-            cp "dist/${{ matrix.out }}" "release/${BASENAME}"
-            (cd release && powershell -Command "Compress-Archive -Path '${BASENAME}' -DestinationPath '${BASENAME}.zip'")
-            rm -f "release/${BASENAME}"
+          cp "dist/${BINARY}" "staging/${BINARY}"
+          chmod +x "staging/${BINARY}"
+
+          if [[ "${BINARY}" == *.exe ]]; then
+            # Windows: zip using Info-ZIP (available on all GitHub-hosted runners via Git for Windows)
+            (cd staging && zip "../release/${BASENAME}.zip" "${BINARY}")
             echo "ASSET=${BASENAME}.zip" >> "$GITHUB_ENV"
           else
-            cp "dist/${{ matrix.out }}" "release/${BASENAME}"
-            chmod +x "release/${BASENAME}" || true
-            tar -czf "release/${BASENAME}.tar.gz" -C release "${BASENAME}"
-            rm -f "release/${BASENAME}"
+            # macOS / Linux: tar.gz preserving executable permissions
+            tar -czf "release/${BASENAME}.tar.gz" -C staging "${BINARY}"
             echo "ASSET=${BASENAME}.tar.gz" >> "$GITHUB_ENV"
           fi
+
+          rm -rf staging
 
       - uses: actions/upload-artifact@v4
         with:
