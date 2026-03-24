@@ -60,7 +60,7 @@ const graphConfig = loadGraphConfig();
 
 const server = new McpServer({
   name: "bemind-search",
-  version: "1.0.6",
+  version: "1.0.7",
 });
 
 // ---------------------------------------------------------------------------

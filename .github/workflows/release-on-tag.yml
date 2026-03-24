@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
-      - "v*.*.*-*"
+      - "sha.*"
 
 permissions:
   contents: write
@@ -17,6 +17,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
       release_name: ${{ steps.meta.outputs.release_name }}
+      is_stable: ${{ steps.meta.outputs.is_stable }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,29 +27,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAG="${GITHUB_REF_NAME}"         # e.g. v2.1.0 or v2.1.0-rc.1
-          VERSION="${TAG#v}"
+          TAG="${GITHUB_REF_NAME}"   # e.g. v2.1.0 or sha.ab12cd3
 
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag is not valid semver: $TAG"
-            exit 1
-          fi
-
-          if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
-            PRERELEASE=true
-          else
+          if [[ "$TAG" == v*.*.* ]]; then
+            VERSION="${TAG#v}"
             PRERELEASE=false
-          fi
-
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          if [ "$PACKAGE_VERSION" != "$VERSION" ]; then
-            echo "package.json version ($PACKAGE_VERSION) must match tag version ($VERSION)"
-            exit 1
+            IS_STABLE=true
+          else
+            # SHA-based tag — treat as prerelease snapshot
+            VERSION="$TAG"
+            PRERELEASE=true
+            IS_STABLE=false
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "is_stable=$IS_STABLE" >> "$GITHUB_OUTPUT"
           echo "release_name=BeMind Search MCP $TAG" >> "$GITHUB_OUTPUT"
 
   build:
@@ -98,7 +93,7 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           BINARY="${{ matrix.out }}"
           BASENAME="${BINARY}-${VERSION}"
-          mkdir -p release staging
+          mkdir -p release release-latest staging
 
           cp "dist/${BINARY}" "staging/${BINARY}"
           chmod +x "staging/${BINARY}"
@@ -107,10 +102,16 @@ jobs:
             # Windows: use pwsh Compress-Archive (always available on windows-latest)
             pwsh -Command "Compress-Archive -Path 'staging/${BINARY}' -DestinationPath 'release/${BASENAME}.zip'"
             echo "ASSET=${BASENAME}.zip" >> "$GITHUB_ENV"
+            # un-versioned copy for latest release
+            pwsh -Command "Compress-Archive -Path 'staging/${BINARY}' -DestinationPath 'release-latest/${BINARY}.zip'"
+            echo "LATEST_ASSET=${BINARY}.zip" >> "$GITHUB_ENV"
           else
             # macOS / Linux: tar.gz preserving executable permissions
             tar -czf "release/${BASENAME}.tar.gz" -C staging "${BINARY}"
             echo "ASSET=${BASENAME}.tar.gz" >> "$GITHUB_ENV"
+            # un-versioned copy for latest release
+            tar -czf "release-latest/${BINARY}.tar.gz" -C staging "${BINARY}"
+            echo "LATEST_ASSET=${BINARY}.tar.gz" >> "$GITHUB_ENV"
           fi
 
           rm -rf staging
@@ -119,6 +120,13 @@ jobs:
         with:
           name: ${{ matrix.out }}-${{ needs.prepare.outputs.version }}
           path: release/*
+
+      - name: Upload latest artifact
+        if: ${{ needs.prepare.outputs.is_stable == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-${{ matrix.out }}
+          path: release-latest/*
 
   publish:
     needs: [prepare, build]
@@ -139,3 +147,27 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             release-assets/*
+
+  publish-latest:
+    needs: [prepare, build, publish]
+    if: ${{ needs.prepare.outputs.is_stable == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: latest-*
+          path: latest-assets
+          merge-multiple: true
+
+      - name: Update latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "BeMind Search MCP (latest)"
+          body: |
+            Always points to the most recent stable release.
+            Current stable: ${{ needs.prepare.outputs.tag }}
+          prerelease: false
+          make_latest: true
+          files: |
+            latest-assets/*

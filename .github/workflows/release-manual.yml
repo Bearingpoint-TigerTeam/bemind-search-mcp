@@ -4,14 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (semver without leading v, e.g. 2.1.0 or 2.1.0-rc.1). Leave empty to use package.json version."
+        description: "Release version (semver without leading v, e.g. 2.1.0). Leave empty to use short commit SHA as version (e.g. sha.ab12cd3)."
         required: false
         type: string
-      prerelease:
-        description: "If true, version must include prerelease suffix like -rc.1 or -beta.1"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -29,92 +24,52 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
-          echo "Missing required secret: RELEASE_PAT"
-          echo "Create a PAT with repository contents write permission and store it as RELEASE_PAT."
-          exit 1
+            echo "Missing required secret: RELEASE_PAT"
+            echo "Create a PAT with repository contents write permission and store it as RELEASE_PAT."
+            exit 1
           fi
 
-      - name: Resolve and validate version
+      - name: Resolve version and tag
         id: v
         shell: bash
         run: |
           set -euo pipefail
-
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
           INPUT_VERSION="${{ github.event.inputs.version }}"
-          PRERELEASE_INPUT="${{ github.event.inputs.prerelease }}"
 
           if [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION="$PACKAGE_VERSION"
-          fi
-
-          # semver basic
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid version: $VERSION"
-            exit 1
-          fi
-
-          # enforce package.json consistency for stable flow
-          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
-            echo "Version mismatch. Input/version='$VERSION' package.json='$PACKAGE_VERSION'"
-            echo "Please bump package.json first to keep source-of-truth consistent."
-            exit 1
-          fi
-
-          # prerelease policy checks
-          if [ "$PRERELEASE_INPUT" = "true" ]; then
-            if ! [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
-              echo "prerelease=true but version has no prerelease suffix (e.g. -rc.1)"
+            # Explicit version: validate semver
+            if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid version: '$INPUT_VERSION' — expected plain semver like 2.1.0"
               exit 1
             fi
+            TAG="v${INPUT_VERSION}"
           else
-            if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
-              echo "prerelease=false but version is prerelease: $VERSION"
-              exit 1
-            fi
+            # No version: tag from short commit SHA
+            SHORT_SHA=$(git rev-parse --short=7 HEAD)
+            TAG="sha.${SHORT_SHA}"
           fi
 
-          TAG="v$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG"
 
       - name: Ensure tag does not already exist
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.v.outputs.tag }}"
-
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
-          echo "Tag already exists: $TAG"
-
-          REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
-          HEAD_SHA=$(git rev-parse HEAD)
-
-          if [ "$REMOTE_SHA" != "$HEAD_SHA" ]; then
-              echo "Existing tag $TAG points to $REMOTE_SHA, but current commit is $HEAD_SHA."
-              echo "Refusing to continue. Bump version or use the tagged commit."
-              exit 1
+            echo "Tag '$TAG' already exists on origin. Nothing to do."
+            exit 1
           fi
-
-          echo "Tag $TAG already points to current commit. Continuing for safe re-run."
-          exit 0
-          fi
-
-          echo "Tag does not exist yet. Proceeding to create."
+          echo "Tag '$TAG' is available. Proceeding to create."
 
       - name: Create and push tag
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.v.outputs.tag }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
-            echo "Tag already exists, skipping creation."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "$TAG"
           git push origin "$TAG"
-          echo "Created tag $TAG"
+          echo "Created and pushed tag $TAG"
