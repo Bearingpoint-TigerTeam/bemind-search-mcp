@@ -38,6 +38,7 @@ import {
   graphListEventsSchema,
   graphCreateEventSchema,
 } from "./tools/graph.js";
+import { isGraphAuthRequiredError } from "./util/tokens.js";
 import { readXlsx, readXlsxSchema } from "./tools/office-read.js";
 import { renderXlsx, renderXlsxSchema } from "./tools/office-xlsx.js";
 import { renderDocx, renderDocxSchema } from "./tools/office-docx.js";
@@ -59,7 +60,7 @@ const graphConfig = loadGraphConfig();
 
 const server = new McpServer({
   name: "bemind-search",
-  version: "1.0.4",
+  version: "1.0.5",
 });
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,32 @@ function errorResult(msg: string) {
     content: [{ type: "text" as const, text: msg }],
     isError: true,
   };
+}
+
+function graphErrorResult(tool: string, err: unknown) {
+  if (isGraphAuthRequiredError(err)) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              error: "graph_auth_required",
+              tool,
+              status: err.status,
+              ...err.prompt,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  return errorResult(`${tool} error: ${message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +225,8 @@ if (graphConfig) {
       try {
         const result = await graphWhoami(graphConfig);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_whoami error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_whoami", e);
       }
     },
   );
@@ -212,8 +239,8 @@ if (graphConfig) {
       try {
         const result = await graphListEmails(graphConfig, args);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_list_emails error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_list_emails", e);
       }
     },
   );
@@ -226,8 +253,8 @@ if (graphConfig) {
       try {
         const result = await graphReadEmail(graphConfig, args);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_read_email error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_read_email", e);
       }
     },
   );
@@ -240,8 +267,8 @@ if (graphConfig) {
       try {
         const result = await graphSendEmail(graphConfig, args);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_send_email error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_send_email", e);
       }
     },
   );
@@ -254,8 +281,8 @@ if (graphConfig) {
       try {
         const result = await graphListEvents(graphConfig, args);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_list_events error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_list_events", e);
       }
     },
   );
@@ -268,8 +295,8 @@ if (graphConfig) {
       try {
         const result = await graphCreateEvent(graphConfig, args);
         return textResult(result);
-      } catch (e: any) {
-        return errorResult(`graph_create_event error: ${e.message}`);
+      } catch (e: unknown) {
+        return graphErrorResult("graph_create_event", e);
       }
     },
   );

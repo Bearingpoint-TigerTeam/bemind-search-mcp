@@ -67,9 +67,24 @@ SAP_AICORE_CLIENT_SECRET="your-client-secret"
 # Microsoft Graph (optional)
 AZURE_TENANT_ID="your-tenant-id"
 AZURE_CLIENT_ID="your-client-id"
+# Optional: set to 0 to disable device-code auth bootstrap
+GRAPH_DEVICE_CODE_FLOW="1"
 ```
 
 Tools are conditionally registered based on available config. Office tools are always enabled.
+
+### Graph auth behavior (device code flow)
+
+When Graph tools are enabled but no valid token exists:
+
+1. First `graph_*` call returns a structured `graph_auth_required` error payload with:
+   - `verification_uri`
+   - `user_code`
+   - `message`
+2. User completes login in browser using the provided code.
+3. Retry any `graph_*` tool call. The server polls once, stores tokens in `~/.bmind/.graph_token`, and proceeds automatically after authorization is complete.
+
+This avoids long-blocking tool calls and works with interactive MCP clients like Codex CLI.
 
 ## Integration with BeMind CLI
 

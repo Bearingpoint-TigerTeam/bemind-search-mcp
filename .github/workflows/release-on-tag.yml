@@ -96,13 +96,27 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
+          BASENAME="${{ matrix.out }}-${VERSION}"
           mkdir -p release
-          cp "dist/${{ matrix.out }}" "release/${{ matrix.out }}-${VERSION}"
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # keep .exe and zip for clean download type
+            cp "dist/${{ matrix.out }}" "release/${BASENAME}"
+            (cd release && powershell -Command "Compress-Archive -Path '${BASENAME}' -DestinationPath '${BASENAME}.zip'")
+            rm -f "release/${BASENAME}"
+            echo "ASSET=${BASENAME}.zip" >> "$GITHUB_ENV"
+          else
+            cp "dist/${{ matrix.out }}" "release/${BASENAME}"
+            chmod +x "release/${BASENAME}" || true
+            tar -czf "release/${BASENAME}.tar.gz" -C release "${BASENAME}"
+            rm -f "release/${BASENAME}"
+            echo "ASSET=${BASENAME}.tar.gz" >> "$GITHUB_ENV"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.out }}-${{ needs.prepare.outputs.version }}
-          path: release/${{ matrix.out }}-${{ needs.prepare.outputs.version }}
+          path: release/*
 
   publish:
     needs: [prepare, build]

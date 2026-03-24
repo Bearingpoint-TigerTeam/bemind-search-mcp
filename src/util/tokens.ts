@@ -61,7 +61,44 @@ interface CachedGraphToken {
   expiresAt: number;
 }
 
+type GraphAuthStatus = "authorization_required" | "authorization_pending";
+
+interface GraphDeviceCodePrompt {
+  message: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  expires_at: string;
+  poll_interval_seconds: number;
+}
+
+interface PendingGraphDeviceCode {
+  deviceCode: string;
+  expiresAtMs: number;
+  pollIntervalMs: number;
+  nextPollAfterMs: number;
+  prompt: GraphDeviceCodePrompt;
+}
+
+export class GraphAuthRequiredError extends Error {
+  readonly status: GraphAuthStatus;
+  readonly prompt: GraphDeviceCodePrompt;
+
+  constructor(status: GraphAuthStatus, prompt: GraphDeviceCodePrompt) {
+    super(`Graph authentication ${status.replace("_", " ")}`);
+    this.name = "GraphAuthRequiredError";
+    this.status = status;
+    this.prompt = prompt;
+  }
+}
+
+export function isGraphAuthRequiredError(value: unknown): value is GraphAuthRequiredError {
+  return value instanceof GraphAuthRequiredError;
+}
+
 let graphTokenCache: CachedGraphToken | undefined;
+let pendingGraphDeviceCode: PendingGraphDeviceCode | undefined;
+let deviceCodeRequestInFlight: Promise<PendingGraphDeviceCode> | undefined;
 
 const GRAPH_TOKEN_PATH = join(homedir(), ".bmind", ".graph_token");
 
@@ -129,8 +166,11 @@ async function refreshGraphToken(config: GraphConfig, refreshToken: string): Pro
   };
 }
 
-async function deviceCodeFlow(config: GraphConfig): Promise<CachedGraphToken> {
-  // Step 1: Request device code
+function graphAuthEnabled(): boolean {
+  return process.env.GRAPH_DEVICE_CODE_FLOW !== "0";
+}
+
+async function requestDeviceCode(config: GraphConfig): Promise<PendingGraphDeviceCode> {
   const codeResp = await fetch(
     `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/devicecode`,
     {
@@ -152,58 +192,125 @@ async function deviceCodeFlow(config: GraphConfig): Promise<CachedGraphToken> {
     device_code: string;
     user_code: string;
     verification_uri: string;
+    verification_uri_complete?: string;
     expires_in: number;
     interval: number;
     message: string;
   };
 
-  // Print instructions to stderr (user must see this)
-  log.info(`\n${codeData.message}\n`);
+  const pollIntervalMs = Math.max((codeData.interval || 5) * 1000, 1000);
+  const expiresInMs = Math.max(codeData.expires_in || 900, 60) * 1000;
+  const nowMs = Date.now();
 
-  // Step 2: Poll for token
-  const pollInterval = (codeData.interval || 5) * 1000;
-  const deadline = Date.now() + codeData.expires_in * 1000;
+  return {
+    deviceCode: codeData.device_code,
+    expiresAtMs: nowMs + expiresInMs,
+    pollIntervalMs,
+    nextPollAfterMs: nowMs + pollIntervalMs,
+    prompt: {
+      message: codeData.message,
+      user_code: codeData.user_code,
+      verification_uri: codeData.verification_uri,
+      verification_uri_complete: codeData.verification_uri_complete,
+      expires_at: new Date(nowMs + expiresInMs).toISOString(),
+      poll_interval_seconds: Math.ceil(pollIntervalMs / 1000),
+    },
+  };
+}
 
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, pollInterval));
+function getPendingDeviceCodeIfValid(): PendingGraphDeviceCode | undefined {
+  if (!pendingGraphDeviceCode) return undefined;
+  if (pendingGraphDeviceCode.expiresAtMs <= Date.now()) {
+    pendingGraphDeviceCode = undefined;
+    return undefined;
+  }
+  return pendingGraphDeviceCode;
+}
 
-    const tokenResp = await fetch(
-      `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: config.clientId,
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: codeData.device_code,
-        }),
-      },
-    );
+async function ensurePendingDeviceCode(config: GraphConfig): Promise<PendingGraphDeviceCode> {
+  const existing = getPendingDeviceCodeIfValid();
+  if (existing) return existing;
 
-    if (tokenResp.ok) {
-      const data = (await tokenResp.json()) as {
-        access_token: string;
-        refresh_token: string;
-        expires_in: number;
-      };
-      const now = Math.floor(Date.now() / 1000);
-      return {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        expiresAt: now + data.expires_in,
-      };
-    }
-
-    const errData = (await tokenResp.json()) as { error: string };
-    if (errData.error === "authorization_pending") continue;
-    if (errData.error === "slow_down") {
-      await new Promise((r) => setTimeout(r, 5000));
-      continue;
-    }
-    throw new Error(`Device code flow error: ${errData.error}`);
+  if (!deviceCodeRequestInFlight) {
+    deviceCodeRequestInFlight = requestDeviceCode(config);
   }
 
-  throw new Error("Device code flow timed out");
+  try {
+    pendingGraphDeviceCode = await deviceCodeRequestInFlight;
+    log.info(`Graph auth required. Open ${pendingGraphDeviceCode.prompt.verification_uri} and enter ${pendingGraphDeviceCode.prompt.user_code}`);
+    return pendingGraphDeviceCode;
+  } finally {
+    deviceCodeRequestInFlight = undefined;
+  }
+}
+
+async function tryPollPendingDeviceCode(config: GraphConfig): Promise<string | undefined> {
+  const pending = getPendingDeviceCodeIfValid();
+  if (!pending) return undefined;
+
+  const nowMs = Date.now();
+  if (nowMs < pending.nextPollAfterMs) return undefined;
+
+  const tokenResp = await fetch(
+    `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: config.clientId,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: pending.deviceCode,
+      }),
+    },
+  );
+
+  if (tokenResp.ok) {
+    const data = (await tokenResp.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+    };
+    const nowSec = Math.floor(Date.now() / 1000);
+    graphTokenCache = {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: nowSec + data.expires_in,
+    };
+    saveGraphTokenToDisk(graphTokenCache);
+    pendingGraphDeviceCode = undefined;
+    return graphTokenCache.accessToken;
+  }
+
+  const rawError = await tokenResp.text();
+  let errCode = "unknown_error";
+  try {
+    const errData = JSON.parse(rawError) as { error?: string };
+    errCode = errData.error ?? errCode;
+  } catch {
+    // Keep generic error code when token endpoint doesn't return JSON.
+  }
+
+  if (errCode === "authorization_pending") {
+    pending.nextPollAfterMs = Date.now() + pending.pollIntervalMs;
+    return undefined;
+  }
+
+  if (errCode === "slow_down") {
+    pending.pollIntervalMs += 5000;
+    pending.nextPollAfterMs = Date.now() + pending.pollIntervalMs;
+    pending.prompt.poll_interval_seconds = Math.ceil(pending.pollIntervalMs / 1000);
+    return undefined;
+  }
+
+  if (errCode === "expired_token" || errCode === "authorization_declined" || errCode === "bad_verification_code") {
+    log.warn(`Graph device code no longer valid (${errCode}), requesting a new one`);
+    pendingGraphDeviceCode = undefined;
+    return undefined;
+  }
+
+  throw new Error(
+    `Graph device code poll failed (${tokenResp.status}): ${errCode}${rawError ? `: ${rawError}` : ""}`,
+  );
 }
 
 export async function getGraphToken(config: GraphConfig): Promise<string> {
@@ -234,8 +341,22 @@ export async function getGraphToken(config: GraphConfig): Promise<string> {
     }
   }
 
-  // 4. Device code flow
-  graphTokenCache = await deviceCodeFlow(config);
-  saveGraphTokenToDisk(graphTokenCache);
-  return graphTokenCache.accessToken;
+  // 4. Pending device-code flow (if user has already been prompted)
+  const pendingToken = await tryPollPendingDeviceCode(config);
+  if (pendingToken) return pendingToken;
+
+  const activePrompt = getPendingDeviceCodeIfValid();
+  if (activePrompt) {
+    throw new GraphAuthRequiredError("authorization_pending", activePrompt.prompt);
+  }
+
+  // 5. Start a new device-code flow and return instructions to caller
+  if (!graphAuthEnabled()) {
+    throw new Error(
+      "Graph auth required: no cached token and device code flow is disabled (GRAPH_DEVICE_CODE_FLOW=0).",
+    );
+  }
+
+  const prompt = await ensurePendingDeviceCode(config);
+  throw new GraphAuthRequiredError("authorization_required", prompt.prompt);
 }
