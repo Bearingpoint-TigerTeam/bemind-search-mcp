@@ -104,8 +104,8 @@ jobs:
           chmod +x "staging/${BINARY}"
 
           if [[ "${BINARY}" == *.exe ]]; then
-            # Windows: zip using Info-ZIP (available on all GitHub-hosted runners via Git for Windows)
-            (cd staging && zip "../release/${BASENAME}.zip" "${BINARY}")
+            # Windows: use pwsh Compress-Archive (always available on windows-latest)
+            pwsh -Command "Compress-Archive -Path 'staging/${BINARY}' -DestinationPath 'release/${BASENAME}.zip'"
             echo "ASSET=${BASENAME}.zip" >> "$GITHUB_ENV"
           else
             # macOS / Linux: tar.gz preserving executable permissions
