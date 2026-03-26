@@ -85,7 +85,7 @@ jobs:
 
       - name: Embed build-time environment variables
         shell: bash
-        run: node scripts/generate-embedded-env.js
+        run: node scripts/generate-embedded-env.cjs
 
       - name: Compile single-file executable
         shell: bash
