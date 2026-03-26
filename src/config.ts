@@ -5,6 +5,12 @@
 
 import { z } from "zod";
 import { log } from "./logging.js";
+import { embeddedEnv } from "./embedded-env.js";
+
+/** Runtime process.env takes precedence over build-time embedded values. */
+function env(key: string): string | undefined {
+  return process.env[key] ?? embeddedEnv[key];
+}
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -70,10 +76,10 @@ export function loadAzureSearchConfig(): AzureSearchConfig | undefined {
 export function loadSapConfig(): SapConfig | undefined {
   return tryParse("SAP", () =>
     SapConfigSchema.parse({
-      host: process.env.SAP_HOST,
-      user: process.env.SAP_USER,
-      password: process.env.SAP_PASSWD,
-      client: process.env.SAP_CLIENT,
+      host: env("SAP_HOST"),
+      user: env("SAP_USER"),
+      password: env("SAP_PASSWD"),
+      client: env("SAP_CLIENT"),
     }),
   );
 }
